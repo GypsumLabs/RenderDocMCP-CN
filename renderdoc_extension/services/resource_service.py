@@ -3,6 +3,8 @@ Resource information service for RenderDoc.
 """
 
 import base64
+import os
+from datetime import datetime
 
 import renderdoc as rd
 
@@ -107,8 +109,8 @@ class ResourceService:
             raise ValueError(result["error"])
         return result["texture"]
 
-    def get_texture_data(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
-        """Get texture pixel data."""
+    def get_texture_raw(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
+        """Get texture raw pixel data (Base64 encoded)."""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
@@ -206,6 +208,145 @@ class ResourceService:
                 "data_length": len(data),
                 "content_base64": base64.b64encode(data).decode("ascii"),
             }
+
+        self._invoke(callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+        return result["data"]
+
+    def get_texture_saved(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
+        """Save texture as PNG file and return file path."""
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"data": None, "error": None}
+
+        def callback(controller):
+            tex_desc = self._find_texture_by_id(controller, resource_id)
+
+            if not tex_desc:
+                result["error"] = "Texture not found: %s" % resource_id
+                return
+
+            # 验证参数
+            if mip < 0 or mip >= tex_desc.mips:
+                result["error"] = "Invalid mip level %d (texture has %d mips)" % (
+                    mip,
+                    tex_desc.mips,
+                )
+                return
+
+            max_slices = tex_desc.arraysize
+            if tex_desc.cubemap:
+                max_slices = tex_desc.arraysize * 6
+            if slice < 0 or (max_slices > 1 and slice >= max_slices):
+                result["error"] = "Invalid slice %d (texture has %d slices)" % (
+                    slice,
+                    max_slices,
+                )
+                return
+
+            if sample < 0 or (tex_desc.msSamp > 1 and sample >= tex_desc.msSamp):
+                result["error"] = "Invalid sample %d (texture has %d samples)" % (
+                    sample,
+                    tex_desc.msSamp,
+                )
+                return
+
+            mip_width = max(1, tex_desc.width >> mip)
+            mip_height = max(1, tex_desc.height >> mip)
+            mip_depth = max(1, tex_desc.depth >> mip)
+
+            is_3d = tex_desc.depth > 1
+            if depth_slice is not None:
+                if not is_3d:
+                    result["error"] = "depth_slice can only be used with 3D textures"
+                    return
+                if depth_slice < 0 or depth_slice >= mip_depth:
+                    result["error"] = "Invalid depth_slice %d (texture has %d depth at mip %d)" % (
+                        depth_slice,
+                        mip_depth,
+                        mip,
+                    )
+                    return
+
+            # 确定扩展路径和temp目录
+            try:
+                # 获取扩展安装路径
+                import sys
+                extension_dir = None
+                if hasattr(sys, "path"):
+                    for p in sys.path:
+                        if "renderdoc_mcp_bridge" in p:
+                            extension_dir = p
+                            break
+                
+                if extension_dir is None:
+                    # 备用：使用当前文件路径
+                    extension_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+                temp_dir = os.path.join(extension_dir, "temp")
+                os.makedirs(temp_dir, exist_ok=True)
+
+                # 生成文件名
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                numeric_id = Parsers.extract_numeric_id(resource_id)
+                filename = "texture_%s_mip%d" % (numeric_id, mip)
+                if slice > 0:
+                    filename += "_slice%d" % slice
+                if sample > 0:
+                    filename += "_sample%d" % sample
+                if depth_slice is not None:
+                    filename += "_depth%d" % depth_slice
+                filename += "_%s.png" % timestamp
+                
+                file_path = os.path.join(temp_dir, filename)
+
+                # 使用RenderDoc的SaveTexture API保存为PNG
+                save_data = rd.TextureSave()
+                save_data.resourceId = tex_desc.resourceId
+                save_data.mip = mip
+                
+                # 设置slice参数 - 使用Subresource对象
+                slice_mapping = rd.TextureSliceMapping()
+                slice_mapping.sliceIndex = depth_slice if (is_3d and depth_slice is not None) else slice
+                save_data.slice = slice_mapping
+                
+                # 设置sample参数 - 使用CompType对象或默认值
+                comp_mapping = rd.TextureComponentMapping()
+                save_data.comp = comp_mapping
+                save_data.sample.mapToArray = False
+                save_data.sample.sampleIndex = sample if sample < tex_desc.msSamp else 0
+
+                # 保存为PNG
+                controller.SaveTexture(save_data, file_path)
+
+                # 返回文件信息
+                file_size = os.path.getsize(file_path)
+                output_depth = 1 if (is_3d and depth_slice is not None) else mip_depth
+                
+                result["data"] = {
+                    "resource_id": resource_id,
+                    "width": mip_width,
+                    "height": mip_height,
+                    "depth": output_depth,
+                    "mip": mip,
+                    "slice": slice,
+                    "sample": sample,
+                    "depth_slice": depth_slice,
+                    "format": str(tex_desc.format.Name()),
+                    "dimension": str(tex_desc.type),
+                    "file_path": file_path,
+                    "file_url": "file:///%s" % file_path.replace(os.sep, '/'),
+                    "file_size": file_size,
+                    "filename": filename,
+                }
+
+            except Exception as e:
+                import traceback
+                result["error"] = "Failed to save texture: %s\n%s" % (str(e), traceback.format_exc())
+                return
 
         self._invoke(callback)
 

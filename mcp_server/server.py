@@ -232,7 +232,7 @@ def get_texture_info(resource_id: str) -> dict:
 
 
 @mcp.tool
-def get_texture_data(
+def get_texture_raw(
     resource_id: str,
     mip: int = 0,
     slice: int = 0,
@@ -240,7 +240,7 @@ def get_texture_data(
     depth_slice: int | None = None,
 ) -> dict:
     """
-    Read the pixel data of a texture resource.
+    Read the raw pixel data of a texture resource.
 
     Args:
         resource_id: The resource ID of the texture to read
@@ -253,11 +253,43 @@ def get_texture_data(
 
     Returns texture pixel data as base64-encoded bytes along with metadata
     including dimensions at the requested mip level and format information.
+    
+    WARNING: Large textures (e.g. 1920x1080) may exceed MCP size limits (~10MB).
+    Consider using get_texture_saved or higher mip levels for large textures.
     """
     params = {"resource_id": resource_id, "mip": mip, "slice": slice, "sample": sample}
     if depth_slice is not None:
         params["depth_slice"] = depth_slice
-    return bridge.call("get_texture_data", params)
+    return bridge.call("get_texture_raw", params)
+
+
+@mcp.tool
+def get_texture_saved(
+    resource_id: str,
+    mip: int = 0,
+    slice: int = 0,
+    sample: int = 0,
+    depth_slice: int | None = None,
+) -> dict:
+    """
+    Save texture to a PNG file and return the file path.
+
+    Args:
+        resource_id: The resource ID of the texture to save
+        mip: Mip level to retrieve (default: 0)
+        slice: Array slice or cube face index (default: 0)
+               For cube maps: 0=X+, 1=X-, 2=Y+, 3=Y-, 4=Z+, 5=Z-
+        sample: MSAA sample index (default: 0)
+        depth_slice: For 3D textures only, extract a specific depth slice (default: None = full volume)
+                     When specified, returns only the 2D slice at that depth index
+
+    The texture is saved as PNG to the extension's temp directory and the file URL is returned.
+    This avoids MCP size limits and allows handling large textures.
+    """
+    params = {"resource_id": resource_id, "mip": mip, "slice": slice, "sample": sample}
+    if depth_slice is not None:
+        params["depth_slice"] = depth_slice
+    return bridge.call("get_texture_saved", params)
 
 
 @mcp.tool

@@ -24,7 +24,8 @@ class RequestHandler:
             "get_shader_info": self._handle_get_shader_info,
             "get_buffer_contents": self._handle_get_buffer_contents,
             "get_texture_info": self._handle_get_texture_info,
-            "get_texture_data": self._handle_get_texture_data,
+            "get_texture_raw": self._handle_get_texture_raw,
+            "get_texture_saved": self._handle_get_texture_saved,
             "get_pipeline_state": self._handle_get_pipeline_state,
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
@@ -152,16 +153,27 @@ class RequestHandler:
             raise ValueError("resource_id is required")
         return self.facade.get_texture_info(resource_id)
 
-    def _handle_get_texture_data(self, params):
-        """Handle get_texture_data request"""
+    def _handle_get_texture_raw(self, params):
+        """Handle get_texture_raw request"""
         resource_id = params.get("resource_id")
         if resource_id is None:
             raise ValueError("resource_id is required")
         mip = params.get("mip", 0)
         slice_idx = params.get("slice", 0)
         sample = params.get("sample", 0)
-        depth_slice = params.get("depth_slice")  # None = full volume
-        return self.facade.get_texture_data(resource_id, mip, slice_idx, sample, depth_slice)
+        depth_slice = params.get("depth_slice")
+        return self.facade.get_texture_raw(resource_id, mip, slice_idx, sample, depth_slice)
+
+    def _handle_get_texture_saved(self, params):
+        """Handle get_texture_saved request"""
+        resource_id = params.get("resource_id")
+        if resource_id is None:
+            raise ValueError("resource_id is required")
+        mip = params.get("mip", 0)
+        slice_idx = params.get("slice", 0)
+        sample = params.get("sample", 0)
+        depth_slice = params.get("depth_slice")
+        return self.facade.get_texture_saved(resource_id, mip, slice_idx, sample, depth_slice)
 
     def _handle_get_pipeline_state(self, params):
         """Handle get_pipeline_state request"""

@@ -1,8 +1,8 @@
 # RenderDoc MCP Server
 
-RenderDoc UI拡張機能として動作するMCPサーバー。AIアシスタントがRenderDocのキャプチャデータにアクセスし、グラフィックスデバッグを支援する。
+作为RenderDoc UI扩展功能运行的MCP服务器。AI助手可以访问RenderDoc的捕获数据，协助图形调试。
 
-## アーキテクチャ
+## 架构
 
 ```
 Claude/AI Client (stdio)
@@ -14,41 +14,46 @@ MCP Server Process (Python + FastMCP 2.0)
 RenderDoc Process (Extension)
 ```
 
-RenderDoc内蔵のPythonにはsocketモジュールがないため、ファイルベースのIPCで通信を行う。
+由于RenderDoc内置的Python没有socket模块,因此使用基于文件的IPC进行通信。
 
-## セットアップ
+## 安装配置
 
-### 1. RenderDoc拡張機能のインストール
+### 1. 安装RenderDoc扩展
 
 ```bash
 python scripts/install_extension.py
 ```
 
-拡張機能は `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge` にインストールされる。
+扩展将安装到 `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`。
 
-### 2. RenderDocで拡張機能を有効化
+### 2. 在RenderDoc中启用扩展
 
-1. RenderDocを起動
-2. Tools > Manage Extensions
-3. "RenderDoc MCP Bridge" を有効化
+1. 启动RenderDoc  
 
-### 3. MCPサーバーのインストール
+2. Tools > Manage Extensions  
+<img src="images/Snipaste_2026-04-20_10-58-18.jpg" width="240">
+
+3. 启用 "RenderDoc MCP Bridge"  
+<img src="images/Snipaste_2026-04-20_11-01-23.jpg" width="400">
+
+### 3. 安装MCP服务器
 
 ```bash
 uv tool install
-uv tool update-shell  # PATHに追加
+uv tool install --editable . # 编辑模式
+uv tool update-shell  # 添加到PATH
 ```
 
-シェルを再起動すると `renderdoc-mcp` コマンドが使えるようになる。
+重启Shell后即可使用 `renderdoc-mcp` 命令。
 
-> **Note**: `--editable` を付けると、ソースコードの変更が即座に反映される（開発時に便利）。
-> 安定版としてインストールする場合は `uv tool install .` を使用。
+> **注意**: 添加 `--editable` 参数后,源代码的修改会立即生效(开发时很方便)。
+> 如需安装稳定版,请使用 `uv tool install .`。
 
-### 4. MCPクライアントの設定
+### 4. 配置MCP客户端
 
 #### Claude Desktop
 
-`claude_desktop_config.json` に追加:
+在 `claude_desktop_config.json` 中添加:
 
 ```json
 {
@@ -62,7 +67,7 @@ uv tool update-shell  # PATHに追加
 
 #### Claude Code
 
-`.mcp.json` に追加:
+在 `.mcp.json` 中添加:
 
 ```json
 {
@@ -74,79 +79,84 @@ uv tool update-shell  # PATHに追加
 }
 ```
 
-## 使い方
+## 使用方法
 
-1. RenderDocを起動し、キャプチャファイル (.rdc) を開く
-2. MCPクライアント (Claude等) から RenderDoc のデータにアクセス
+1. 启动RenderDoc,打开捕获文件 (.rdc)
+2. 从MCP客户端 (Claude等) 访问RenderDoc的数据
 
-## MCPツール一覧
+## MCP工具列表
 
-| ツール | 説明 |
+| 工具 | 说明 |
 |--------|------|
-| `get_capture_status` | キャプチャの読み込み状態を確認 |
-| `get_draw_calls` | ドローコール一覧を階層構造で取得 |
-| `get_draw_call_details` | 特定のドローコールの詳細情報を取得 |
-| `get_shader_info` | シェーダーのソースコード・定数バッファの値を取得 |
-| `get_buffer_contents` | バッファの内容を取得 (Base64) |
-| `get_texture_info` | テクスチャのメタデータを取得 |
-| `get_texture_data` | テクスチャのピクセルデータを取得 (Base64) |
-| `get_pipeline_state` | パイプライン状態を取得 |
+| `get_capture_status` | 检查捕获的加载状态 |
+| `get_draw_calls` | 获取DrawCall列表的层级结构 |
+| `get_draw_call_details` | 获取特定DrawCall的详细信息 |
+| `get_shader_info` | 获取着色器源代码和常量缓冲区的值 |
+| `get_buffer_contents` | 获取缓冲区内容 (Base64) |
+| `get_texture_info` | 获取纹理的元数据 |
+| `get_texture_raw` | 获取纹理的原始像素数据 (Base64，大纹理可能超限) |
+| `get_texture_saved` | 将纹理保存为PNG文件并返回文件路径（推荐） |
+| `get_pipeline_state` | 获取管线状态 |
 
-## 使用例
+## 使用示例
 
-### ドローコール一覧の取得
+### 获取DrawCall列表
 
 ```
 get_draw_calls(include_children=true)
 ```
 
-### シェーダー情報の取得
+### 获取着色器信息
 
 ```
 get_shader_info(event_id=123, stage="pixel")
 ```
 
-### パイプライン状態の取得
+### 获取管线状态
 
 ```
 get_pipeline_state(event_id=123)
 ```
 
-### テクスチャデータの取得
+### 获取纹理数据
 
 ```
-# 2Dテクスチャのmip 0を取得
-get_texture_data(resource_id="ResourceId::123")
+# 推荐：保存为PNG文件（避免MCP大小限制）
+get_texture_saved(resource_id="ResourceId::123")
+# 返回: {"file_path": "...", "file_url": "file:///...", "width": 1920, "height": 1080, ...}
 
-# 特定のmipレベルを取得
-get_texture_data(resource_id="ResourceId::123", mip=2)
+# 获取特定的mip级别
+get_texture_saved(resource_id="ResourceId::123", mip=2)
 
-# キューブマップの特定の面を取得 (0=X+, 1=X-, 2=Y+, 3=Y-, 4=Z+, 5=Z-)
-get_texture_data(resource_id="ResourceId::456", slice=3)
+# 获取立方体贴图的特定面 (0=X+, 1=X-, 2=Y+, 3=Y-, 4=Z+, 5=Z-)
+get_texture_saved(resource_id="ResourceId::456", slice=3)
 
-# 3Dテクスチャの特定の深度スライスを取得
-get_texture_data(resource_id="ResourceId::789", depth_slice=5)
+# 获取3D纹理的特定深度切片
+get_texture_saved(resource_id="ResourceId::789", depth_slice=5)
+
+# 原始Base64数据（仅适用于小纹理，大纹理会超过MCP 5MB限制）
+get_texture_raw(resource_id="ResourceId::123", mip=2)
 ```
 
-### バッファデータの部分取得
+### 部分获取缓冲区数据
 
 ```
-# バッファ全体を取得
+# 获取整个缓冲区
 get_buffer_contents(resource_id="ResourceId::123")
 
-# オフセット256から512バイト取得
+# 从偏移256处获取512字节
 get_buffer_contents(resource_id="ResourceId::123", offset=256, length=512)
 ```
 
-## 要件
+## 系统要求
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
 - RenderDoc 1.20+
 
-> **Note**: 動作確認はWindows + DirectX 11環境でのみ行っています。
-> Linux/macOS + Vulkan/OpenGL環境でも動作する可能性がありますが、未検証です。
+> **注意**: 仅在Windows + DirectX 11环境下进行过测试。
+> Linux/macOS + Vulkan/OpenGL环境可能也能运行,但未经验证。
 
-## ライセンス
+## 许可证
 
 MIT

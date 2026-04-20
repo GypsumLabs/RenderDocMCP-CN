@@ -122,9 +122,13 @@ class RenderDocFacade:
         """Get texture metadata"""
         return self._resource.get_texture_info(resource_id)
 
-    def get_texture_data(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
-        """Get texture pixel data"""
-        return self._resource.get_texture_data(resource_id, mip, slice, sample, depth_slice)
+    def get_texture_raw(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
+        """Get texture raw pixel data (Base64 encoded)"""
+        return self._resource.get_texture_raw(resource_id, mip, slice, sample, depth_slice)
+
+    def get_texture_saved(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
+        """Save texture as PNG file and return file path"""
+        return self._resource.get_texture_saved(resource_id, mip, slice, sample, depth_slice)
 
     # ==================== Pipeline Operations ====================
 
