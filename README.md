@@ -92,6 +92,23 @@ uv tool update-shell         # 添加到PATH
 
 > 建议先调用 `ping` 确认扩展存活，再调用 `get_capture_status` 确认捕获是否已加载。
 
+## 配套 Skill
+
+仓库 `skills/renderdoc-capture-analysis/` 下带了一个配套 Skill，用来引导 AI Agent 走完一次基础分析：
+
+1. **就绪检查**：确认 RenderDoc 扩展存活、截帧已加载；没就绪时给出判别方法（含"扩展没在轮询"与"截帧未打开"两种情况的处理），并指导打开截帧。
+2. **基础检索**：整帧概览 → 动作层级 → GPU 耗时分布 → 代表事件（管线状态/着色器）→ 一次资源反查。
+3. **输出报告**：按固定模板给出基础分析报告（截帧概述、主要 Pass 构成、耗时热点、代表事件剖析），最后把后续深入分析的需求交还给你。
+
+它把本文档里那些容易踩的坑都写成流程硬约束了：单请求通道必须串行、标记的 `event_id` 不能当范围用、`include_children=false` 会丢标记、`total_duration_ms` 不是帧时间、反查是全帧扫描等。
+
+**安装**：把 `skills/renderdoc-capture-analysis/` 整个目录拷到客户端的 Skill 目录——
+
+- 项目级：项目根目录下的 `.codebuddy/skills/`
+- 用户级：`~/.codebuddy/skills/`（Windows 为 `%USERPROFILE%\.codebuddy\skills\`）
+
+放好后重连客户端即可。之后提到"分析截帧""看看这帧""RenderDoc 帧分析"之类，Agent 会自动加载它。
+
 ## MCP工具列表
 
 | 工具 | 说明 |

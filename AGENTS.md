@@ -47,6 +47,9 @@ RenderDocMCP/
 │       ├── serializers.py             # Action、变量序列化
 │       └── helpers.py                 # 动作遍历、stage 列表
 │
+├── skills/                            # 配套 Skill（拷到客户端 Skill 目录后生效，见 README）
+│   └── renderdoc-capture-analysis/    # 截帧基础分析流程、工具速查与报告模板
+│
 └── scripts/
     └── install_extension.py           # 扩展安装脚本（uninstall 参数可卸载）
 ```
