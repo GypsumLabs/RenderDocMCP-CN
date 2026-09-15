@@ -1,11 +1,11 @@
 # RenderDoc MCP Server
 
-作为RenderDoc UI扩展功能运行的MCP服务器。AI助手可以访问RenderDoc的捕获数据，协助图形调试。
+作为 RenderDoc UI 扩展运行的 MCP 服务器。AI Agent 通过 MCP 访问 RenderDoc 的捕获数据，协助图形调试。
 
 ## 架构
 
 ```
-Claude/AI Client (stdio)
+AI Agent (MCP Client, stdio)
         │
         ▼
 MCP Server Process (Python + FastMCP 2.0)
@@ -26,7 +26,7 @@ python scripts/install_extension.py
 
 扩展将安装到 `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`。
 
-> 注意：重复安装会先删除整个扩展目录，其中包含 `get_texture_saved` 生成的 `temp/` 图片。
+> 注意：重复安装是逐文件覆盖，`get_texture_saved` 生成在 `temp/` 下的图片会保留。
 
 ### 2. 在RenderDoc中启用扩展
 
@@ -48,25 +48,14 @@ uv tool update-shell         # 添加到PATH
 
 重启Shell后即可使用 `renderdoc-mcp` 命令。
 
-### 4. 配置MCP客户端
+### 4. 配置 MCP 客户端
 
-#### Claude Desktop
+把 `renderdoc-mcp` 注册为 MCP 服务器即可。各客户端的字段结构一致，差别只在配置文件的位置：
 
-在 `claude_desktop_config.json` 中添加:
+- 项目级配置：项目根目录下的 `.mcp.json`（多数客户端识别该文件名）
+- 客户端自带配置：例如 Claude Desktop 的 `claude_desktop_config.json`
 
-```json
-{
-  "mcpServers": {
-    "renderdoc": {
-      "command": "renderdoc-mcp"
-    }
-  }
-}
-```
-
-#### Claude Code
-
-在 `.mcp.json` 中添加:
+内容都是：
 
 ```json
 {
@@ -77,11 +66,13 @@ uv tool update-shell         # 添加到PATH
   }
 }
 ```
+
+具体路径以你所使用客户端的文档为准。
 
 ## 使用方法
 
 1. 启动RenderDoc,打开捕获文件 (.rdc)
-2. 从MCP客户端 (Claude等) 访问RenderDoc的数据
+2. 由 AI Agent 通过 MCP 客户端访问 RenderDoc 的数据
 
 > 建议先调用 `ping` 确认扩展存活，再调用 `get_capture_status` 确认捕获是否已加载。
 
@@ -90,28 +81,28 @@ uv tool update-shell         # 添加到PATH
 | 工具 | 说明 |
 |--------|------|
 | **捕获管理** | |
-| `ping` | 探测扩展是否存活（IPC 连通性自检） |
-| `get_capture_status` | 检查捕获的加载状态 |
-| `list_captures` | 列出指定目录内的 .rdc 文件 |
-| `open_capture` | 打开捕获文件（会自动关闭当前捕获） |
+| `ping` | 探测扩展是否存活 |
+| `get_capture_status` | 检查捕获是否已加载 |
+| `list_captures` | 列出目录内的 .rdc 文件 |
+| `open_capture` | 打开捕获文件（会关闭当前捕获） |
 | **DrawCall 与动作** | |
-| `get_draw_calls` | 获取DrawCall列表的层级结构（支持 Marker 过滤、event 范围、标志过滤） |
-| `get_frame_summary` | 获取帧整体统计（DrawCall/Dispatch 数、顶层 Marker、资源数量） |
-| `get_draw_call_details` | 获取特定DrawCall的详细信息 |
-| `get_action_timings` | 获取操作的 GPU 执行时间 |
+| `get_draw_calls` | 获取动作的层级列表 |
+| `get_frame_summary` | 获取整帧概览 |
+| `get_draw_call_details` | 获取单个绘制调用的详细信息 |
+| `get_action_timings` | 获取动作的 GPU 执行时间 |
 | **反查** | |
-| `find_draws_by_shader` | 按着色器名（部分匹配）反查 DrawCall，可限定 stage |
-| `find_draws_by_texture` | 按纹理名（部分匹配）反查 DrawCall |
-| `find_draws_by_resource` | 按资源 ID（完全匹配）反查 DrawCall |
-| `find_draws_by_mesh` | 按网格名（顶点/索引缓冲的资源名，部分匹配）反查 DrawCall |
+| `find_draws_by_shader` | 按着色器名反查绘制调用 |
+| `find_draws_by_texture` | 按纹理名反查绘制调用 |
+| `find_draws_by_resource` | 按资源 ID 反查绘制调用 |
+| `find_draws_by_mesh` | 按网格（顶点/索引缓冲）名反查绘制调用 |
 | **资源** | |
-| `get_texture_info` | 获取纹理的元数据 |
-| `get_texture_raw` | 获取纹理的原始像素数据 (Base64，大纹理可能超限) |
-| `get_texture_saved` | 将纹理保存为PNG文件并返回文件路径（推荐） |
-| `get_buffer_contents` | 获取缓冲区内容 (Base64) |
+| `get_texture_info` | 获取纹理元数据 |
+| `get_texture_raw` | 读取纹理原始像素（Base64） |
+| `get_texture_saved` | 把纹理保存为 PNG |
+| `get_buffer_contents` | 读取缓冲区内容（Base64） |
 | **管线** | |
-| `get_shader_info` | 获取着色器反汇编、常量缓冲区的实际值、资源绑定 |
-| `get_pipeline_state` | 获取管线状态（着色器绑定、RT/深度目标、视口与裁剪、混合、深度模板、输入装配） |
+| `get_shader_info` | 获取着色器反汇编、常量缓冲值与资源绑定 |
+| `get_pipeline_state` | 获取完整管线状态 |
 
 ### 参数说明
 

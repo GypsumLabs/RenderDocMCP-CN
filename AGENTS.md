@@ -1,6 +1,6 @@
 # RenderDoc MCP 服务器（开发笔记）
 
-作为 RenderDoc UI 扩展运行的 MCP 服务器。AI 助手可以访问 RenderDoc 的捕获数据，协助进行 DirectX 11 图形调试。
+作为 RenderDoc UI 扩展运行的 MCP 服务器。AI Agent 通过 MCP 访问 RenderDoc 的捕获数据，协助进行 DirectX 11 图形调试。
 
 > 面向使用者的安装步骤、工具清单、参数含义与错误约定统一放在 [README.md](README.md)，本文件只记录开发与排查相关内容，避免两份文档各说一套。
 
@@ -9,7 +9,7 @@
 **混合进程分离方式**:
 
 ```
-Claude/AI 客户端 (stdio)
+AI Agent (MCP 客户端, stdio)
         │
         ▼
 MCP 服务器进程（标准 Python + FastMCP 2.0）
