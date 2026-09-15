@@ -14,7 +14,7 @@ MCP Server Process (Python + FastMCP 2.0)
 RenderDoc Process (Extension)
 ```
 
-由于RenderDoc内置的Python没有socket模块,因此使用基于文件的IPC进行通信。
+扩展运行在 Qt UI 线程上，直接用阻塞式 socket 会卡住界面、还要额外处理端口占用，因此通信采用基于文件的 IPC：扩展侧只依赖 `PySide2.QtCore.QTimer` 每 100ms 轮询请求文件，不使用任何网络模块。
 
 ## 安装配置
 
@@ -26,28 +26,27 @@ python scripts/install_extension.py
 
 扩展将安装到 `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`。
 
+> 注意：重复安装会先删除整个扩展目录，其中包含 `get_texture_saved` 生成的 `temp/` 图片。
+
 ### 2. 在RenderDoc中启用扩展
 
 1. 启动RenderDoc  
-
-2. Tools > Manage Extensions  
 <img src="images/Snipaste_2026-04-20_10-58-18.jpg" width="240">
 
-3. 启用 "RenderDoc MCP Bridge"  
+2. Tools > Manage Extensions  
 <img src="images/Snipaste_2026-04-20_11-01-23.jpg" width="400">
+
+3. 启用 "RenderDoc MCP Bridge"  
 
 ### 3. 安装MCP服务器
 
 ```bash
-uv tool install
-uv tool install --editable . # 编辑模式
-uv tool update-shell  # 添加到PATH
+uv tool install .            # 稳定版
+uv tool install --editable . # 编辑模式：源码修改立即生效，开发时使用
+uv tool update-shell         # 添加到PATH
 ```
 
 重启Shell后即可使用 `renderdoc-mcp` 命令。
-
-> **注意**: 添加 `--editable` 参数后,源代码的修改会立即生效(开发时很方便)。
-> 如需安装稳定版,请使用 `uv tool install .`。
 
 ### 4. 配置MCP客户端
 
@@ -84,21 +83,93 @@ uv tool update-shell  # 添加到PATH
 1. 启动RenderDoc,打开捕获文件 (.rdc)
 2. 从MCP客户端 (Claude等) 访问RenderDoc的数据
 
+> 建议先调用 `ping` 确认扩展存活，再调用 `get_capture_status` 确认捕获是否已加载。
+
 ## MCP工具列表
 
 | 工具 | 说明 |
 |--------|------|
+| **捕获管理** | |
+| `ping` | 探测扩展是否存活（IPC 连通性自检） |
 | `get_capture_status` | 检查捕获的加载状态 |
-| `get_draw_calls` | 获取DrawCall列表的层级结构 |
+| `list_captures` | 列出指定目录内的 .rdc 文件 |
+| `open_capture` | 打开捕获文件（会自动关闭当前捕获） |
+| **DrawCall 与动作** | |
+| `get_draw_calls` | 获取DrawCall列表的层级结构（支持 Marker 过滤、event 范围、标志过滤） |
+| `get_frame_summary` | 获取帧整体统计（DrawCall/Dispatch 数、顶层 Marker、资源数量） |
 | `get_draw_call_details` | 获取特定DrawCall的详细信息 |
-| `get_shader_info` | 获取着色器源代码和常量缓冲区的值 |
-| `get_buffer_contents` | 获取缓冲区内容 (Base64) |
+| `get_action_timings` | 获取操作的 GPU 执行时间 |
+| **反查** | |
+| `find_draws_by_shader` | 按着色器名（部分匹配）反查 DrawCall，可限定 stage |
+| `find_draws_by_texture` | 按纹理名（部分匹配）反查 DrawCall |
+| `find_draws_by_resource` | 按资源 ID（完全匹配）反查 DrawCall |
+| `find_draws_by_mesh` | 按网格名（顶点/索引缓冲的资源名，部分匹配）反查 DrawCall |
+| **资源** | |
 | `get_texture_info` | 获取纹理的元数据 |
 | `get_texture_raw` | 获取纹理的原始像素数据 (Base64，大纹理可能超限) |
 | `get_texture_saved` | 将纹理保存为PNG文件并返回文件路径（推荐） |
-| `get_pipeline_state` | 获取管线状态 |
+| `get_buffer_contents` | 获取缓冲区内容 (Base64) |
+| **管线** | |
+| `get_shader_info` | 获取着色器反汇编、常量缓冲区的实际值、资源绑定 |
+| `get_pipeline_state` | 获取管线状态（着色器绑定、RT/深度目标、视口与裁剪、混合、深度模板、输入装配） |
+
+### 参数说明
+
+- `get_shader_info`：
+  - `cbuffer_slots` 只返回指定常量缓冲槽位的值，**槽位是着色器反射里的索引（从 0 开始）**；未被选中的常量缓冲仍会出现在结果中，但带 `skipped: true` 且不含变量值。
+  - `max_variables` 限制每个常量缓冲返回的变量数（默认 64，超出时结果带 `truncated` 标记），因此默认参数下**不是**"全部变量"。
+  - `include_disassembly` 控制是否返回反汇编（默认 `true`）。
+  - 常量缓冲可能包含数百个变量，按需限定可避免响应过大。
+- `find_draws_by_*`：需要逐 DrawCall 回放来遍历整帧，耗时随 DrawCall 数量增长，因此使用独立的超时上限。返回结构为 `{"matches": [{"event_id", "name", "match_reason"}], "total_matches", "scanned_draws"}`，其中 `match_reason` 形如 `"ShaderStage.Pixel SRV: 'CharacterSkin'"`。
+  - `find_draws_by_shader` 的匹配目标是入口点名（通常是 `main`）或着色器资源名，用 `"main"` 这类通用词会命中几乎全部绘制，建议传入足够具体的关键词。
+  - 四个反查工具都是全帧扫描，耗时接近，请把它们安排在单独的工具调用里，不要和别的调用并发（见下方"使用注意"）。
+- `get_pipeline_state`：
+  - 着色器绑定部分体积较大，如只需状态可用该工具配合 `get_shader_info` 的裁剪参数一起使用。
+  - `include_cbuffer_variables`（默认 `true`）控制是否返回每个常量缓冲的变量列表。常量缓冲可能包含数百个变量、名字多为 `cb0_v1` 这类无意义编号，会显著放大响应体积；只关心槽位/大小时传 `false`，需要变量值请改用 `get_shader_info`。
+  - 视口与裁剪最多各返回 16 项，超出的会被丢弃。
+  - 某一状态块读取失败时，错误会写进 `errors`（键为该状态名，如 `errors.blend`），其余状态照常返回，不会让整个请求失败；混合、深度模板、视口裁剪、输入装配等均按 RenderDoc 1.46 的 `PipeState` 接口读取。
+
+### 使用注意
+
+- 扩展侧是**单请求通道**（固定的一组 `request.json` / `response.json`），同一时刻只能处理一个请求。请勿并行发起多个工具调用：并发调用会互相覆盖请求文件，先发出的请求只能等满超时（MCP 客户端通常会自动串行化同一服务器的调用，但不保证）。
+- **不要同时开多个客户端**（例如 IDE 内的 MCP 服务器 + 一个跑脚本调试的进程）。被 MCP 客户端放弃的调用不会立刻停止：服务端会继续等响应直到超时为止，在此期间它会持续抢读 `response.json`，把本该给其他客户端的响应吃掉，表现出来就是别的调用莫名其妙超时。`find_draws_by_mesh` 的"超时"最可能就是这种情况，而同一个查询单独执行时却是正常的。
+- 其他工具在首次调用前会自动做一次 `ping` 探测，因此 RenderDoc 未启动、扩展未加载时会立即报错，而不是白等满 120 秒。
+- 环境变量只影响 MCP 服务器侧的等待时间，不会改变扩展的实际执行速度。
+
+### 错误返回
+
+所有工具通过 FastMCP 返回，失败时抛出异常，异常信息中带错误码：
+
+| 错误码 | 含义 |
+|--------|------|
+| `-32601` | 请求的方法不存在（扩展版本与 MCP 服务器不匹配） |
+| `-32602` | 参数不合法，例如缺少必填参数、`resource_id` 格式错误、`event_id` 无对应动作、mip/slice/sample 越界 |
+| `-32000` | 扩展侧执行失败（未加载捕获、RenderDoc API 报错等） |
+
+MCP 服务器侧还可能抛出：
+
+- `找不到 IPC 目录 ...`：RenderDoc 未启动，或扩展未加载（扩展启动时会创建该目录）。
+- `RenderDoc MCP Bridge 未响应 ...`：首次调用前的连通性探测失败，说明扩展没有在轮询请求文件。
+- `请求超时(Ns) ...`：请求已下发但超时未收到响应，通常说明该查询确实耗时过长，可调大超时或缩小查询范围。
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|--------|--------|------|
+| `RENDERDOC_MCP_TIMEOUT` | `120` | 常规请求超时（秒） |
+| `RENDERDOC_MCP_SEARCH_TIMEOUT` | `300` | 整帧反查类请求超时（秒），用于 `find_draws_by_*` |
+| `RENDERDOC_MCP_PROBE_TIMEOUT` | `5` | 首次调用前连通性探测的超时（秒） |
+
+> 通信基于文件 IPC，不占用端口，因此 `RENDERDOC_MCP_HOST` / `RENDERDOC_MCP_PORT` 已废弃。
 
 ## 使用示例
+
+### 连通性自检
+
+```
+ping()
+# → {"status": "ok", "ipc_dir": "...", "polling": true}
+```
 
 ### 获取DrawCall列表
 
@@ -109,7 +180,11 @@ get_draw_calls(include_children=true)
 ### 获取着色器信息
 
 ```
+# 反汇编 + 常量缓冲的值（每个常量缓冲默认最多 64 个变量，超出时带 truncated 标记）
 get_shader_info(event_id=123, stage="pixel")
+
+# 只读取 4 号常量缓冲的值，并跳过反汇编（常量缓冲变量很多时推荐）
+get_shader_info(event_id=123, stage="pixel", cbuffer_slots=[4], include_disassembly=false)
 ```
 
 ### 获取管线状态
@@ -121,7 +196,7 @@ get_pipeline_state(event_id=123)
 ### 获取纹理数据
 
 ```
-# 推荐：保存为PNG文件（避免MCP大小限制）
+# 推荐：保存为PNG文件（避免响应大小超限）
 get_texture_saved(resource_id="ResourceId::123")
 # 返回: {"file_path": "...", "file_url": "file:///...", "width": 1920, "height": 1080, ...}
 
@@ -134,9 +209,11 @@ get_texture_saved(resource_id="ResourceId::456", slice=3)
 # 获取3D纹理的特定深度切片
 get_texture_saved(resource_id="ResourceId::789", depth_slice=5)
 
-# 原始Base64数据（仅适用于小纹理，大纹理会超过MCP 5MB限制）
+# 原始Base64数据（仅适用于小纹理，Base64 会把体积放大约 1/3，大纹理请改用 get_texture_saved）
 get_texture_raw(resource_id="ResourceId::123", mip=2)
 ```
+
+> `get_texture_saved` 生成的 PNG 会累积在扩展安装目录的 `temp/` 下，目前不会自动清理，请自行按需删除。
 
 ### 部分获取缓冲区数据
 
@@ -148,47 +225,11 @@ get_buffer_contents(resource_id="ResourceId::123")
 get_buffer_contents(resource_id="ResourceId::123", offset=256, length=512)
 ```
 
-## Skill: RenderDoc 截帧分析
-
-本项目包含一个专门配合MCP使用的 **RenderDoc 截帧分析技能** ([skills/renderdoc-analyze/SKILL.md](skills/renderdoc-analyze/SKILL.md))，提供自动化的渲染管线分析能力：
-
-### 功能特性
-
-- **自动识别引擎和管线** - 支持 Unity URP/HDRP、Unreal 及自研管线的自动识别
-- **模块化性能分析** - 按渲染阶段（Shadow/GBuffer/Lighting/PostProcess 等）统计 DrawCall 和耗时
-- **可视化报告生成** - 自动生成包含最终画面截图的 Markdown 分析报告
-- **针对性优化建议** - 基于分析结果提供具体的优化方向
-
-### 使用方式
-
-在支持 Skill 的 AI 助手中导入 Skill 后，使用提示词触发：
-
-> "使用 RenderDoc Skill 分析截帧，把报告保存到D:\XXXX\XXX"
-
-AI 将自动执行以下流程：
-1. 检查 RenderDoc MCP 服务状态
-2. 打开截帧并获取帧摘要
-3. 识别引擎类型和渲染管线架构
-4. 获取最终渲染画面截图
-5. 分析 DrawCall 层级和模块耗时
-6. 生成详细分析报告并保存到指定位置
-
-### 报告内容
-
-生成的报告包含：
-- 渲染快报（API 类型、DrawCall 统计、资源使用）
-- 渲染管线结构图（Marker 层级可视化）
-- 各模块耗时分析表格
-- 最终画面截图
-- 优化建议
-
-在开始着手分析的第一步使用此 Skill 使 AI 快速了解渲染管线概况，然后再深入探索各个模块
-
 ## 系统要求
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
-- RenderDoc 1.20+
+- RenderDoc 1.46（管线状态相关 API 按 1.46 的 `PipeState` 接口实现，早期版本命名不同、未做兼容）
 
 > **注意**: 仅在 Windows + DirectX 11 环境下进行过测试。
 > Linux/macOS + Vulkan/OpenGL 环境可能也能运行，但未经验证。

@@ -1,5 +1,19 @@
 # RenderDoc MCP 改善提案
 
+> **状态（2026-09）**：本文档为历史设计提案，6 项提案中 5 项已落地，当前仅作 ROADMAP 与设计依据保留。
+>
+> | 提案 | 状态 | 落地位置 |
+> |------|------|----------|
+> | 1. マーカーフィルタリング | ✅ 已实现 | `get_draw_calls(marker_filter=..., exclude_markers=...)` |
+> | 2. event_id 範囲指定 | ✅ 已实现 | `get_draw_calls(event_id_min=..., event_id_max=...)` |
+> | 3. 逆引き検索 | ✅ 已实现 | `find_draws_by_shader/texture/resource/mesh` |
+> | 4. フレームサマリー | ✅ 已实现 | `get_frame_summary`（未包含提案里的 `render_targets` / `unique_shaders`） |
+> | 5. ドローコールのみ取得 | ✅ 已实现 | `get_draw_calls(only_actions=..., flags_filter=...)` |
+> | 6. バッチパイプラインステート | ❌ 未实现 | 待评估 |
+>
+> 另外"Unity 固有のフィルタリングプリセット"未实现；`get_action_timings`（GPU 耗时）为提案外的新增能力。
+> 工具现状以 [README.md](README.md) 为准。
+
 ## 背景
 
 UnityプロジェクトでRenderDocキャプチャを分析する際、以下の課題がある：
