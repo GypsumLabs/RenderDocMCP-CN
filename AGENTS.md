@@ -105,6 +105,18 @@ get_draw_calls(
    （`find_draws_by_resource` 曾因此把"未绑定着色器的 stage"全部误判为命中，`get_buffer_contents` 则恒报 `Buffer not found`）。
    资源比较统一使用 `Parsers.same_resource(a, b)` 或 `Parsers.numeric_id(x)`。
 
+### 改动扩展后的生效流程
+
+扩展代码在 RenderDoc 启动时载入，运行中替换文件不会生效，因此改动 `renderdoc_extension/` 后必须：
+
+1. 重新安装：`python scripts/install_extension.py`
+   （逐文件覆盖到 `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`，`temp/` 下的截图会保留）
+2. 重启 RenderDoc —— 仅重新打开捕获无效，已导入的模块会被缓存
+3. 跑一遍冒烟测试确认没有回归（见下节）
+
+> MCP 服务器侧（`mcp_server/`）改完不需要动 RenderDoc；但客户端有会话级的工具描述缓存，
+> 改了工具描述要重连 MCP 才会生效。
+
 ### 冒烟测试
 
 ```bash
