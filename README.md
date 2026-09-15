@@ -40,6 +40,22 @@ python scripts/install_extension.py
 
 ### 3. 安装MCP服务器
 
+需要先有 [uv](https://docs.astral.sh/uv/)。如果执行 `uv --version` 提示找不到命令，先按平台安装：
+
+```powershell
+# Windows（PowerShell）
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# 或使用 winget，避免执行远程脚本
+winget install --id=astral-sh.uv -e
+```
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+也可以用 `pipx install uv` 或 `pip install uv`。装完重启 Shell，再注册 MCP 服务器：
+
 ```bash
 uv tool install .            # 稳定版
 uv tool install --editable . # 编辑模式：源码修改立即生效，开发时使用
