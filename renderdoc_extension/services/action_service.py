@@ -30,7 +30,7 @@ class ActionService:
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"actions": []}
+        result = {"actions": [], "error": None}
 
         def callback(controller):
             root_actions = controller.GetRootActions()
@@ -47,7 +47,10 @@ class ActionService:
                 flags_filter=flags_filter,
             )
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
         return result
 
     def get_frame_summary(self):
@@ -57,7 +60,7 @@ class ActionService:
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"summary": None}
+        result = {"summary": None, "error": None}
 
         def callback(controller):
             root_actions = controller.GetRootActions()
@@ -73,11 +76,12 @@ class ActionService:
                 "presents": 0,
                 "markers": 0,
             }
-            total_actions = [0]
+            total_actions = 0
 
             def count_actions(actions):
+                nonlocal total_actions
                 for action in actions:
-                    total_actions[0] += 1
+                    total_actions += 1
                     flags = action.flags
 
                     if flags & rd.ActionFlags.Drawcall:
@@ -90,6 +94,8 @@ class ActionService:
                         stats["copies"] += 1
                     if flags & rd.ActionFlags.Present:
                         stats["presents"] += 1
+                    # 只统计 PushMarker/SetMarker：一组 Push/Pop 算 1 个逻辑标记，
+                    # 若把 PopMarker 也算进来会让标记数翻倍（一组 Push/Pop 会被算成两个）
                     if flags & (rd.ActionFlags.PushMarker | rd.ActionFlags.SetMarker):
                         stats["markers"] += 1
 
@@ -115,7 +121,7 @@ class ActionService:
 
             result["summary"] = {
                 "api": str(api),
-                "total_actions": total_actions[0],
+                "total_actions": total_actions,
                 "statistics": stats,
                 "top_level_markers": top_markers,
                 "resource_counts": {
@@ -124,7 +130,10 @@ class ActionService:
                 },
             }
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
         return result["summary"]
 
     def get_draw_call_details(self, event_id):
@@ -170,7 +179,7 @@ class ActionService:
 
             result["details"] = details
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])
@@ -308,7 +317,7 @@ class ActionService:
                 "count": len(timings),
             }
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])

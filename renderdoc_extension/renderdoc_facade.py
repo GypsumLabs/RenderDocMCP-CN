@@ -104,6 +104,10 @@ class RenderDocFacade:
         """Find all draw calls using a shader with the given name (partial match)"""
         return self._search.find_draws_by_shader(shader_name, stage)
 
+    def find_draws_by_mesh(self, mesh_name):
+        """Find all draw calls using a mesh with the given name (partial match)"""
+        return self._search.find_draws_by_mesh(mesh_name)
+
     def find_draws_by_texture(self, texture_name):
         """Find all draw calls using a texture with the given name (partial match)"""
         return self._search.find_draws_by_texture(texture_name)
@@ -132,10 +136,10 @@ class RenderDocFacade:
 
     # ==================== Pipeline Operations ====================
 
-    def get_shader_info(self, event_id, stage):
+    def get_shader_info(self, event_id, stage, cbuffer_slots=None, max_variables=64, include_disassembly=True):
         """Get shader information for a specific stage"""
-        return self._pipeline.get_shader_info(event_id, stage)
+        return self._pipeline.get_shader_info(event_id, stage, cbuffer_slots, max_variables, include_disassembly)
 
-    def get_pipeline_state(self, event_id):
+    def get_pipeline_state(self, event_id, include_cbuffer_variables=True):
         """Get full pipeline state at an event"""
-        return self._pipeline.get_pipeline_state(event_id)
+        return self._pipeline.get_pipeline_state(event_id, include_cbuffer_variables)

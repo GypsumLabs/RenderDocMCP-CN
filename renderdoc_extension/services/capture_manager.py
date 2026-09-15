@@ -2,6 +2,9 @@
 Capture management service for RenderDoc.
 """
 
+import datetime
+import os
+
 import renderdoc as rd
 
 
@@ -24,16 +27,25 @@ class CaptureManager:
         except Exception:
             pass
 
-        # Get API type via replay
+        result["api"] = self._read_api_type()
+        return result
+
+    def _read_api_type(self):
+        """通过 replay 线程读取图形 API 类型，失败返回 None"""
+        holder = {"api": None}
+
         def callback(controller):
             try:
-                props = controller.GetAPIProperties()
-                result["api"] = str(props.pipelineType)
+                holder["api"] = str(controller.GetAPIProperties().pipelineType)
             except Exception:
-                pass
+                holder["api"] = None
 
-        self._invoke(callback)
-        return result
+        try:
+            self._invoke(callback)
+        except Exception:
+            return None
+
+        return holder["api"]
 
     def list_captures(self, directory):
         """
@@ -45,9 +57,6 @@ class CaptureManager:
         Returns:
             dict with 'captures' list containing file info
         """
-        import os
-        import datetime
-
         # Validate directory exists
         if not os.path.isdir(directory):
             raise ValueError("Directory not found: %s" % directory)
@@ -90,8 +99,6 @@ class CaptureManager:
         Returns:
             dict with success status and capture info
         """
-        import os
-
         # Validate file exists
         if not os.path.isfile(capture_path):
             raise ValueError("Capture file not found: %s" % capture_path)
@@ -128,20 +135,8 @@ class CaptureManager:
         }
 
         # Get API type if possible (may require replay thread)
-        try:
-            api_result = {"api": None}
-
-            def callback(controller):
-                try:
-                    props = controller.GetAPIProperties()
-                    api_result["api"] = str(props.pipelineType)
-                except Exception:
-                    pass
-
-            self._invoke(callback)
-            if api_result["api"]:
-                result["api"] = api_result["api"]
-        except Exception:
-            pass
+        api = self._read_api_type()
+        if api:
+            result["api"] = api
 
         return result

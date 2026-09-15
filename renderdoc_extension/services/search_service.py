@@ -24,7 +24,7 @@ class SearchService:
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"matches": [], "scanned_draws": 0}
+        result = {"matches": [], "scanned_draws": 0, "error": None}
 
         def callback(controller):
             root_actions = controller.GetRootActions()
@@ -50,7 +50,11 @@ class SearchService:
                         "match_reason": match_reason,
                     })
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
+
+        if result["error"]:
+            raise ValueError(result["error"])
+
         result["total_matches"] = len(result["matches"])
         return result
 
@@ -84,6 +88,44 @@ class SearchService:
             return None
 
         return self._search_draws(matcher)
+
+    def find_draws_by_mesh(self, mesh_name):
+        """Find all draw calls using a mesh (vertex/index buffer) with the given name (partial match)."""
+        needle = mesh_name.lower()
+
+        def matcher(pipe, controller, action, ctx):
+            for kind, buffer_id in self._get_bound_buffers(pipe):
+                buffer_name = ""
+                try:
+                    buffer_name = ctx.GetResourceName(buffer_id)
+                except Exception:
+                    pass
+
+                if buffer_name and needle in buffer_name.lower():
+                    return "%s buffer: '%s'" % (kind, buffer_name)
+            return None
+
+        return self._search_draws(matcher)
+
+    def _get_bound_buffers(self, pipe):
+        """Get bound index/vertex buffers as (kind, resource_id) pairs"""
+        buffers = []
+
+        try:
+            index_buffer = pipe.GetIBuffer()
+            if index_buffer and index_buffer.resourceId != rd.ResourceId.Null():
+                buffers.append(("index", index_buffer.resourceId))
+        except Exception:
+            pass
+
+        try:
+            for vertex_buffer in pipe.GetVBuffers():
+                if vertex_buffer and vertex_buffer.resourceId != rd.ResourceId.Null():
+                    buffers.append(("vertex", vertex_buffer.resourceId))
+        except Exception:
+            pass
+
+        return buffers
 
     def find_draws_by_texture(self, texture_name):
         """Find all draw calls using a texture with the given name (partial match)."""
@@ -124,18 +166,19 @@ class SearchService:
                     pass
 
             # Check render targets
+            # 原实现调用 pipe.GetOutputMerger()，RenderDoc 1.46 没有该方法，异常被 except: pass 吞掉，
+            # 导致"渲染目标"这一路匹配实际上从未生效
             try:
-                om = pipe.GetOutputMerger()
-                if om:
-                    for i, rt in enumerate(om.renderTargets):
-                        if rt.resourceId != rd.ResourceId.Null():
-                            res_name = ""
-                            try:
-                                res_name = ctx.GetResourceName(rt.resourceId)
-                            except Exception:
-                                pass
-                            if res_name and texture_name.lower() in res_name.lower():
-                                return "RenderTarget[%d]: '%s'" % (i, res_name)
+                for index, target in enumerate(pipe.GetOutputTargets()):
+                    if target.resource == rd.ResourceId.Null():
+                        continue
+                    res_name = ""
+                    try:
+                        res_name = ctx.GetResourceName(target.resource)
+                    except Exception:
+                        pass
+                    if res_name and texture_name.lower() in res_name.lower():
+                        return "RenderTarget[%d]: '%s'" % (index, res_name)
             except Exception:
                 pass
 
@@ -145,43 +188,53 @@ class SearchService:
 
     def find_draws_by_resource(self, resource_id):
         """Find all draw calls using a specific resource ID (exact match)."""
-        target_rid = Parsers.parse_resource_id(resource_id)
+        target_id = Parsers.numeric_id(resource_id)
         stages_to_check = Helpers.get_all_shader_stages()
+
+        def is_target(candidate):
+            """资源 ID 比较；必须排除 Null，否则会匹配到所有未绑定的槽位"""
+            if candidate == rd.ResourceId.Null():
+                return False
+            return Parsers.numeric_id(candidate) == target_id
 
         def matcher(pipe, controller, action, ctx):
             # Check shaders
+            # 原实现比较的是 parse_resource_id 构造出的对象，它等价于 Null，
+            # 于是"未绑定着色器的 stage"全部被误判为命中
             for stage in stages_to_check:
-                shader = pipe.GetShader(stage)
-                if shader == target_rid:
+                if is_target(pipe.GetShader(stage)):
                     return "%s shader" % str(stage)
 
             # Check SRVs and UAVs
             for stage in stages_to_check:
                 try:
-                    srvs = pipe.GetReadOnlyResources(stage, False)
-                    for srv in srvs:
-                        if srv.descriptor.resource == target_rid:
+                    for srv in pipe.GetReadOnlyResources(stage, False):
+                        if is_target(srv.descriptor.resource):
                             return "%s SRV slot %d" % (str(stage), srv.access.index)
                 except Exception:
                     pass
 
                 try:
-                    uavs = pipe.GetReadWriteResources(stage, False)
-                    for uav in uavs:
-                        if uav.descriptor.resource == target_rid:
+                    for uav in pipe.GetReadWriteResources(stage, False):
+                        if is_target(uav.descriptor.resource):
                             return "%s UAV slot %d" % (str(stage), uav.access.index)
                 except Exception:
                     pass
 
             # Check render targets
+            # 原实现调用 pipe.GetOutputMerger()，RenderDoc 1.46 没有该方法，异常被 except: pass 吞掉，
+            # 导致"渲染目标/深度目标"两类匹配实际上从未生效
             try:
-                om = pipe.GetOutputMerger()
-                if om:
-                    for i, rt in enumerate(om.renderTargets):
-                        if rt.resourceId == target_rid:
-                            return "RenderTarget[%d]" % i
-                    if om.depthTarget.resourceId == target_rid:
-                        return "DepthTarget"
+                for index, target in enumerate(pipe.GetOutputTargets()):
+                    if is_target(target.resource):
+                        return "RenderTarget[%d]" % index
+            except Exception:
+                pass
+
+            try:
+                depth_target = pipe.GetDepthTarget()
+                if depth_target is not None and is_target(depth_target.resource):
+                    return "DepthTarget"
             except Exception:
                 pass
 

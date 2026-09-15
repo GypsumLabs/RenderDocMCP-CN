@@ -17,6 +17,7 @@ class RequestHandler:
             "get_draw_calls": self._handle_get_draw_calls,
             "get_frame_summary": self._handle_get_frame_summary,
             "find_draws_by_shader": self._handle_find_draws_by_shader,
+            "find_draws_by_mesh": self._handle_find_draws_by_mesh,
             "find_draws_by_texture": self._handle_find_draws_by_texture,
             "find_draws_by_resource": self._handle_find_draws_by_resource,
             "get_draw_call_details": self._handle_get_draw_call_details,
@@ -95,6 +96,13 @@ class RequestHandler:
         stage = params.get("stage")
         return self.facade.find_draws_by_shader(shader_name, stage)
 
+    def _handle_find_draws_by_mesh(self, params):
+        """Handle find_draws_by_mesh request"""
+        mesh_name = params.get("mesh_name")
+        if mesh_name is None:
+            raise ValueError("mesh_name is required")
+        return self.facade.find_draws_by_mesh(mesh_name)
+
     def _handle_find_draws_by_texture(self, params):
         """Handle find_draws_by_texture request"""
         texture_name = params.get("texture_name")
@@ -135,7 +143,12 @@ class RequestHandler:
             raise ValueError("event_id is required")
         if stage is None:
             raise ValueError("stage is required")
-        return self.facade.get_shader_info(int(event_id), stage)
+        cbuffer_slots = params.get("cbuffer_slots")
+        max_variables = params.get("max_variables", 64)
+        include_disassembly = params.get("include_disassembly", True)
+        return self.facade.get_shader_info(
+            int(event_id), stage, cbuffer_slots, max_variables, include_disassembly
+        )
 
     def _handle_get_buffer_contents(self, params):
         """Handle get_buffer_contents request"""
@@ -180,7 +193,8 @@ class RequestHandler:
         event_id = params.get("event_id")
         if event_id is None:
             raise ValueError("event_id is required")
-        return self.facade.get_pipeline_state(int(event_id))
+        include_cbuffer_variables = params.get("include_cbuffer_variables", True)
+        return self.facade.get_pipeline_state(int(event_id), include_cbuffer_variables)
 
     def _handle_list_captures(self, params):
         """Handle list_captures request"""

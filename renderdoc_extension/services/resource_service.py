@@ -4,11 +4,12 @@ Resource information service for RenderDoc.
 
 import base64
 import os
+import traceback
 from datetime import datetime
 
 import renderdoc as rd
 
-from ..utils import Parsers
+from ..utils import Parsers, Helpers
 
 
 class ResourceService:
@@ -19,14 +20,47 @@ class ResourceService:
         self._invoke = invoke_fn
 
     def _find_texture_by_id(self, controller, resource_id):
-        """Find texture by resource ID"""
-        target_id = Parsers.extract_numeric_id(resource_id)
+        """Find texture by resource ID
+
+        用数字形式比较：rd.ResourceId() 构造出的对象与真实 ResourceId 不相等，
+        一旦用它做比较会出现"永远找不到"或"匹配到 Null 资源"两类错误。
+        """
+        target_id = Parsers.numeric_id(resource_id)
         for tex in controller.GetTextures():
-            tex_id_str = str(tex.resourceId)
-            tex_id = Parsers.extract_numeric_id(tex_id_str)
-            if tex_id == target_id:
+            if Parsers.numeric_id(tex.resourceId) == target_id:
                 return tex
         return None
+
+    def _resolve_subresource(self, tex_desc, mip, slice, sample, depth_slice):
+        """校验 mip/slice/sample/depth_slice 并计算该 mip 下的尺寸
+
+        返回 (错误信息, mip_width, mip_height, mip_depth, is_3d)；错误信息为 None 表示校验通过。
+        原先 get_texture_raw 与 get_texture_saved 各写了一份逐行相同的校验，这里统一实现。
+        """
+        if mip < 0 or mip >= tex_desc.mips:
+            return ("Invalid mip level %d (texture has %d mips)" % (mip, tex_desc.mips), 0, 0, 0, False)
+
+        max_slices = tex_desc.arraysize
+        if tex_desc.cubemap:
+            max_slices = tex_desc.arraysize * 6
+        if slice < 0 or (max_slices > 1 and slice >= max_slices):
+            return ("Invalid slice %d (texture has %d slices)" % (slice, max_slices), 0, 0, 0, False)
+
+        if sample < 0 or (tex_desc.msSamp > 1 and sample >= tex_desc.msSamp):
+            return ("Invalid sample %d (texture has %d samples)" % (sample, tex_desc.msSamp), 0, 0, 0, False)
+
+        mip_width = max(1, tex_desc.width >> mip)
+        mip_height = max(1, tex_desc.height >> mip)
+        mip_depth = max(1, tex_desc.depth >> mip)
+        is_3d = tex_desc.depth > 1
+
+        if depth_slice is not None:
+            if not is_3d:
+                return ("depth_slice can only be used with 3D textures", 0, 0, 0, is_3d)
+            if depth_slice < 0 or depth_slice >= mip_depth:
+                return ("Invalid depth_slice %d (texture has %d depth at mip %d)" % (depth_slice, mip_depth, mip), 0, 0, 0, is_3d)
+
+        return (None, mip_width, mip_height, mip_depth, is_3d)
 
     def get_buffer_contents(self, resource_id, offset=0, length=0):
         """Get buffer data"""
@@ -38,15 +72,15 @@ class ResourceService:
         def callback(controller):
             # Parse resource ID
             try:
-                rid = Parsers.parse_resource_id(resource_id)
+                target_id = Parsers.numeric_id(resource_id)
             except Exception:
                 result["error"] = "Invalid resource ID: %s" % resource_id
                 return
 
-            # Find buffer
+            # Find buffer（原实现用 parse_resource_id 构造的对象比较，恒不相等，导致永远报 Buffer not found）
             buf_desc = None
             for buf in controller.GetBuffers():
-                if buf.resourceId == rid:
+                if Parsers.numeric_id(buf.resourceId) == target_id:
                     buf_desc = buf
                     break
 
@@ -56,7 +90,7 @@ class ResourceService:
 
             # Get data
             actual_length = length if length > 0 else buf_desc.length
-            data = controller.GetBufferData(rid, offset, actual_length)
+            data = controller.GetBufferData(buf_desc.resourceId, offset, actual_length)
 
             result["data"] = {
                 "resource_id": resource_id,
@@ -66,7 +100,7 @@ class ResourceService:
                 "content_base64": base64.b64encode(data).decode("ascii"),
             }
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])
@@ -80,30 +114,32 @@ class ResourceService:
         result = {"texture": None, "error": None}
 
         def callback(controller):
+            # 原实现用一层大 try 包住并回传 traceback，非法 ID 时会把整段堆栈抛给调用方；
+            # 异常现在由 replay_call 统一兜底，这里只需要区分"ID 非法"与"纹理不存在"。
             try:
                 tex_desc = self._find_texture_by_id(controller, resource_id)
+            except Exception:
+                result["error"] = "Invalid resource ID: %s" % resource_id
+                return
 
-                if not tex_desc:
-                    result["error"] = "Texture not found: %s" % resource_id
-                    return
+            if not tex_desc:
+                result["error"] = "Texture not found: %s" % resource_id
+                return
 
-                result["texture"] = {
-                    "resource_id": resource_id,
-                    "width": tex_desc.width,
-                    "height": tex_desc.height,
-                    "depth": tex_desc.depth,
-                    "array_size": tex_desc.arraysize,
-                    "mip_levels": tex_desc.mips,
-                    "format": str(tex_desc.format.Name()),
-                    "dimension": str(tex_desc.type),
-                    "msaa_samples": tex_desc.msSamp,
-                    "byte_size": tex_desc.byteSize,
-                }
-            except Exception as e:
-                import traceback
-                result["error"] = "Error: %s\n%s" % (str(e), traceback.format_exc())
+            result["texture"] = {
+                "resource_id": resource_id,
+                "width": tex_desc.width,
+                "height": tex_desc.height,
+                "depth": tex_desc.depth,
+                "array_size": tex_desc.arraysize,
+                "mip_levels": tex_desc.mips,
+                "format": str(tex_desc.format.Name()),
+                "dimension": str(tex_desc.type),
+                "msaa_samples": tex_desc.msSamp,
+                "byte_size": tex_desc.byteSize,
+            }
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])
@@ -117,57 +153,21 @@ class ResourceService:
         result = {"data": None, "error": None}
 
         def callback(controller):
-            tex_desc = self._find_texture_by_id(controller, resource_id)
+            try:
+                tex_desc = self._find_texture_by_id(controller, resource_id)
+            except Exception:
+                result["error"] = "Invalid resource ID: %s" % resource_id
+                return
 
             if not tex_desc:
                 result["error"] = "Texture not found: %s" % resource_id
                 return
 
-            # Validate mip level
-            if mip < 0 or mip >= tex_desc.mips:
-                result["error"] = "Invalid mip level %d (texture has %d mips)" % (
-                    mip,
-                    tex_desc.mips,
-                )
+            # 参数校验与 mip 尺寸计算统一走 _resolve_subresource（原为 raw/saved 两份重复实现）
+            error, mip_width, mip_height, mip_depth, is_3d = self._resolve_subresource(tex_desc, mip, slice, sample, depth_slice)
+            if error:
+                result["error"] = error
                 return
-
-            # Validate slice for array/cube textures
-            max_slices = tex_desc.arraysize
-            if tex_desc.cubemap:
-                max_slices = tex_desc.arraysize * 6
-            if slice < 0 or (max_slices > 1 and slice >= max_slices):
-                result["error"] = "Invalid slice %d (texture has %d slices)" % (
-                    slice,
-                    max_slices,
-                )
-                return
-
-            # Validate sample for MSAA
-            if sample < 0 or (tex_desc.msSamp > 1 and sample >= tex_desc.msSamp):
-                result["error"] = "Invalid sample %d (texture has %d samples)" % (
-                    sample,
-                    tex_desc.msSamp,
-                )
-                return
-
-            # Calculate dimensions at this mip level
-            mip_width = max(1, tex_desc.width >> mip)
-            mip_height = max(1, tex_desc.height >> mip)
-            mip_depth = max(1, tex_desc.depth >> mip)
-
-            # Validate depth_slice for 3D textures
-            is_3d = tex_desc.depth > 1
-            if depth_slice is not None:
-                if not is_3d:
-                    result["error"] = "depth_slice can only be used with 3D textures"
-                    return
-                if depth_slice < 0 or depth_slice >= mip_depth:
-                    result["error"] = "Invalid depth_slice %d (texture has %d depth at mip %d)" % (
-                        depth_slice,
-                        mip_depth,
-                        mip,
-                    )
-                    return
 
             # Create subresource specification
             sub = rd.Subresource()
@@ -209,7 +209,7 @@ class ResourceService:
                 "content_base64": base64.b64encode(data).decode("ascii"),
             }
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])
@@ -223,68 +223,36 @@ class ResourceService:
         result = {"data": None, "error": None}
 
         def callback(controller):
-            tex_desc = self._find_texture_by_id(controller, resource_id)
+            try:
+                tex_desc = self._find_texture_by_id(controller, resource_id)
+            except Exception:
+                result["error"] = "Invalid resource ID: %s" % resource_id
+                return
 
             if not tex_desc:
                 result["error"] = "Texture not found: %s" % resource_id
                 return
 
-            # 验证参数
-            if mip < 0 or mip >= tex_desc.mips:
-                result["error"] = "Invalid mip level %d (texture has %d mips)" % (
-                    mip,
-                    tex_desc.mips,
-                )
+            # 验证参数（与 get_texture_raw 共用同一份实现）
+            error, mip_width, mip_height, mip_depth, is_3d = self._resolve_subresource(tex_desc, mip, slice, sample, depth_slice)
+            if error:
+                result["error"] = error
                 return
-
-            max_slices = tex_desc.arraysize
-            if tex_desc.cubemap:
-                max_slices = tex_desc.arraysize * 6
-            if slice < 0 or (max_slices > 1 and slice >= max_slices):
-                result["error"] = "Invalid slice %d (texture has %d slices)" % (
-                    slice,
-                    max_slices,
-                )
-                return
-
-            if sample < 0 or (tex_desc.msSamp > 1 and sample >= tex_desc.msSamp):
-                result["error"] = "Invalid sample %d (texture has %d samples)" % (
-                    sample,
-                    tex_desc.msSamp,
-                )
-                return
-
-            mip_width = max(1, tex_desc.width >> mip)
-            mip_height = max(1, tex_desc.height >> mip)
-            mip_depth = max(1, tex_desc.depth >> mip)
-
-            is_3d = tex_desc.depth > 1
-            if depth_slice is not None:
-                if not is_3d:
-                    result["error"] = "depth_slice can only be used with 3D textures"
-                    return
-                if depth_slice < 0 or depth_slice >= mip_depth:
-                    result["error"] = "Invalid depth_slice %d (texture has %d depth at mip %d)" % (
-                        depth_slice,
-                        mip_depth,
-                        mip,
-                    )
-                    return
 
             # 确定扩展路径和temp目录
             try:
-                # 获取扩展安装路径
-                import sys
-                extension_dir = None
-                if hasattr(sys, "path"):
-                    for p in sys.path:
-                        if "renderdoc_mcp_bridge" in p:
-                            extension_dir = p
-                            break
-                
-                if extension_dir is None:
-                    # 备用：使用当前文件路径
-                    extension_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # 本文件位于 <扩展目录>/services/resource_service.py，上溯两级即扩展根目录
+                # 原实现先遍历 sys.path 找 "renderdoc_mcp_bridge"，但下面的兜底分支本就等价且更可靠
+                # import sys
+                # extension_dir = None
+                # if hasattr(sys, "path"):
+                #     for p in sys.path:
+                #         if "renderdoc_mcp_bridge" in p:
+                #             extension_dir = p
+                #             break
+                # if extension_dir is None:
+                #     extension_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                extension_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
                 temp_dir = os.path.join(extension_dir, "temp")
                 os.makedirs(temp_dir, exist_ok=True)
@@ -344,11 +312,10 @@ class ResourceService:
                 }
 
             except Exception as e:
-                import traceback
                 result["error"] = "Failed to save texture: %s\n%s" % (str(e), traceback.format_exc())
                 return
 
-        self._invoke(callback)
+        Helpers.replay_call(self._invoke, result, callback)
 
         if result["error"]:
             raise ValueError(result["error"])

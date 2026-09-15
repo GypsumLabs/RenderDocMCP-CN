@@ -84,6 +84,7 @@ class Serializers:
         only_actions=False,
         flags_filter=None,
         _in_matching_marker=False,
+        _flags_filter_set=None,
     ):
         """
         Serialize action list to JSON-compatible format with filtering.
@@ -102,10 +103,9 @@ class Serializers:
         """
         serialized = []
 
-        # Build flags filter set for efficient lookup
-        flags_filter_set = None
-        if flags_filter:
-            flags_filter_set = set(flags_filter)
+        # flags 过滤集合只在最外层构建一次，避免每层递归都重建（整帧遍历时是明显开销）
+        if _flags_filter_set is None:
+            _flags_filter_set = set(flags_filter) if flags_filter else set()
 
         for action in actions:
             name = action.GetName(structured_file)
@@ -151,14 +151,15 @@ class Serializers:
                         only_actions=only_actions,
                         flags_filter=flags_filter,
                         _in_matching_marker=in_matching,
+                        _flags_filter_set=_flags_filter_set,
                     )
                     serialized.extend(child_actions)
                 continue
 
-            # 5. flags_filter check - only for non-markers
-            if flags_filter_set and not is_marker:
-                flag_names = Serializers.serialize_flags(flags)
-                if not any(f in flags_filter_set for f in flag_names):
+            # 5. flags_filter check - only for non-markers（flag_names 只序列化一次，下面复用）
+            flag_names = Serializers.serialize_flags(flags)
+            if _flags_filter_set and not is_marker:
+                if not any(f in _flags_filter_set for f in flag_names):
                     continue
 
             # 6. Check if this action should be included based on marker_filter
@@ -179,6 +180,7 @@ class Serializers:
                     only_actions=only_actions,
                     flags_filter=flags_filter,
                     _in_matching_marker=in_matching,
+                    _flags_filter_set=_flags_filter_set,
                 )
                 has_passing_children = len(children_result) > 0
 
@@ -194,7 +196,6 @@ class Serializers:
                 should_include = in_range and passes_marker_filter
 
             if should_include:
-                flag_names = Serializers.serialize_flags(flags)
                 item = {
                     "event_id": action.eventId,
                     "action_id": action.actionId,
