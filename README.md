@@ -122,11 +122,17 @@ uv tool update-shell         # 添加到PATH
 
 ### 参数说明
 
+- `get_draw_calls`：
+  - `include_children=false` 会把**所有标记一并丢掉**（标记只在"有子动作通过过滤"时才被保留，不再递归就没有子动作），结果退化成平铺的动作列表，Pass 结构完全消失。要按 Pass 取内容请用 `marker_filter`。
+  - **标记自身的 `event_id` 落在其子动作的事件范围之外**（实测某帧标记为 6962-6971，子动作却分布在 152-6927），因此不要拿标记的 `event_id` 去设 `event_id_min` / `event_id_max`：绘制会被全部过滤掉，标记又因为没有子动作而被丢弃，最终返回空数组。
 - `get_shader_info`：
   - `cbuffer_slots` 只返回指定常量缓冲槽位的值，**槽位是着色器反射里的索引（从 0 开始）**；未被选中的常量缓冲仍会出现在结果中，但带 `skipped: true` 且不含变量值。
   - `max_variables` 限制每个常量缓冲返回的变量数（默认 64，超出时结果带 `truncated` 标记），因此默认参数下**不是**"全部变量"。
   - `include_disassembly` 控制是否返回反汇编（默认 `true`）。
   - 常量缓冲可能包含数百个变量，按需限定可避免响应过大。
+- `get_action_timings`：
+  - `total_duration_ms` 是本次返回各事件耗时的**总和**（GPU 忙时累加），**不是帧时间**；加了过滤会相应变小。硬件不支持计时计数器时返回 `available: false`，不要当成"耗时为 0"。
+  - 同一事件的计时**每次读都有抖动**（实测同一个 Dispatch 分别读到 2.615 ms 与 2.141 ms），只适合判断量级与相对占比，不要做精确对比。
 - `find_draws_by_*`：需要逐 DrawCall 回放来遍历整帧，耗时随 DrawCall 数量增长，因此使用独立的超时上限。返回结构为 `{"matches": [{"event_id", "name", "match_reason"}], "total_matches", "scanned_draws"}`，其中 `match_reason` 形如 `"ShaderStage.Pixel SRV: 'CharacterSkin'"`。
   - `find_draws_by_shader` 的匹配目标是入口点名（通常是 `main`）或着色器资源名，用 `"main"` 这类通用词会命中几乎全部绘制，建议传入足够具体的关键词。
   - 四个反查工具都是全帧扫描，耗时接近，请把它们安排在单独的工具调用里，不要和别的调用并发（见下方"使用注意"）。
